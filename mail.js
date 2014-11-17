@@ -88,7 +88,7 @@ function MailScope () {
 	
 	// Instantiate a MIMEReader mail parser.
 	
-	var mimeReader	= new MIMEReader();
+	var mimeReader	= new (require('waf-mail-private-MIMEReader'))();
 	
 	function Mail (from, to, subject, content) {
 
@@ -212,10 +212,11 @@ function MailScope () {
 		// Return an array of lines, which is the header, just need to add CRLF at the end of each line to send 
 		// using SMTP. There is (currently) no error checking: mandatory fields "From" and "Date" are not checked,
 		// some fields may appear only a limited number of times, long lines must be folded properly. Note that 
-		// an individual line may have CRLF sequence inside it because of folding.
+		// an individual line may have CRLF sequence inside it because of folding. BCC is never returned so it will 
+        // never appear in headers of sent mails.
 		
 		this.getHeader = function () {
-		
+        		
 			var	header = new Array();
 			var name;
 		
@@ -226,32 +227,44 @@ function MailScope () {
 					continue;
 					
 				else if (typeof this[name] == 'string') {
+                
+                    var lowerCaseName   = name.toLowerCase();
+                    
+                    if (lowerCaseName == 'bcc')
+                    
+                        continue;
 				
-					if (typeof fieldNameTable[name] == 'string') 
+					else if (typeof fieldNameTable[lowerCaseName] == 'string') 
 					
-						header.push(fieldNameTable[name] + ': ' + this[name]);
+						header.push(fieldNameTable[lowerCaseName] + ': ' + this[name]);
 						
 					else
 					
 						header.push(name + ': ' + this[name]);
 					
 				} else if (this[name] instanceof Array) {
+                                    				
+					var lowerCaseName   = name.toLowerCase();
+                
+                    if (lowerCaseName == 'bcc')
+                    
+                        continue;
 				
-					var	i;
-				
-					for (i = 0; i < this[name].length; i++)
+					for (var i = 0; i < this[name].length; i++) {
 					
 						if (typeof this[name][i] != 'string') 
 						
 							throw new MailException(MailException.INVALID_STATE);	// Impossible!
 							
-						else if (typeof fieldNameTable[name] == 'string') 
+						else if (typeof fieldNameTable[lowerCaseName] == 'string')  
 					
-							header.push(fieldNameTable[name] + ': ' + this[name][i]);
+							header.push(fieldNameTable[lowerCaseName] + ': ' + this[name][i]);
 						
 						else
 					
 							header.push(name + ': ' + this[name][i]);
+                            
+                     }
 					
 				} else 
 				
@@ -428,21 +441,39 @@ function MailScope () {
 		} 
 		
 		// Send this mail using SMTP at address:port, using SSL if requested.
-		// This function is blocking.
+        // Two syntaxes are possible:
+        //
+        //  send (smtpConfiguration)
+        //  send (address, port, isSSL, username, password)     (deprecated)
+        //
+        // This function is blocking.
 		
 		this.send = function (address, port, isSSL, username, password) {
+        
+            var smtpConfiguration;
+        
+            if (arguments.length == 1) {
+            
+                smtpConfiguration = arguments[0];
 		
-			if (typeof address != 'string' || typeof port != 'number')
+			} else if (typeof address != 'string' || typeof port != 'number')
 			
 				throw new MailException(MailException.INVALID_ARGUMENT);
 		
 			else {
-			
-				var smtp	= require(typeof requireNative != 'undefined' ? 'waf-mail/SMTP' : './SMTP.js');				
-
-				return smtp.send(address, port, isSSL, username, password, this);
-				
+			    
+                smtpConfiguration = {};                
+                smtpConfiguration.address = address;
+                smtpConfiguration.port = port;
+                smtpConfiguration.isSSL = isSSL;
+                smtpConfiguration.password = password;
+                smtpConfiguration.username = username;                
+          
 			}
+            
+            var smtp    = require(typeof requireNative != 'undefined' ? 'waf-mail/SMTP' : './SMTP.js');
+            
+            return smtp.send(smtpConfiguration, this);
 			
 		}
 		
@@ -498,7 +529,7 @@ function MailScope () {
 				mimeReader.parseMail(this, memoryBuffers);
 				
 			} catch (e) {
-			
+						
 				// Catch text conversion errors and ignore them.
 			
 			}
@@ -510,11 +541,11 @@ function MailScope () {
 				if (typeof this[k] == 'string')
 				
 					this[k] = mimeReader.parseEncodedWords(this[k]);
-					
+			
 			// If MIME is used, set body as first "text/plain" part if any.
 			
-			if  (this.isMIME()) 
-			
+			if (this.isMIME()) {
+						
 				for (var i = 0; i < this.messageParts.length; i++) 
 				
 					if (this.messageParts[i].mediaType.match(/text\/plain/) != null) {
@@ -527,6 +558,12 @@ function MailScope () {
 						break;
 					
 					}
+					
+			} else {
+			
+				body = this.body;
+				
+			}
 		
 		}
 		
@@ -709,9 +746,9 @@ var createMessage = function (from, recipient, subject, content) {
 		var	i;
 		
 		for (i = 0; i < recipient.length; i++)
-		
+		        
 			message.addField('To', recipient[i]);
-	
+
 	} else
 	
 		message.To = recipient;
@@ -728,8 +765,18 @@ var createMessage = function (from, recipient, subject, content) {
 var send = function (address, port, isSSL, username, password, from, recipient, subject, content) {
 
 	var smtp	= require(typeof requireNative != 'undefined' ? 'waf-mail/SMTP' : './SMTP.js');				
+    
+    if (arguments.length == 2)
+    
+        return smtp.send(arguments[0], arguments[1]);
+        
+    else if (arguments.length == 6)
+    
+        return smtp.send(address, port, isSSL, username, password, arguments[5]);
+    
+    else
 
-	return smtp.send(address, port, isSSL, username, password, from, recipient, subject, content);
+        return smtp.send(address, port, isSSL, username, password, from, recipient, subject, content);
 }
 
 exports.createMessage = createMessage;

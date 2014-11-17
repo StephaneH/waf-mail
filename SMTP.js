@@ -51,7 +51,7 @@ function SMTPScope () {
 
 	var	isWakanda			= typeof requireNative != 'undefined';
 		
-	var validEmailRegExp	= /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}/;
+	var validEmailRegExp	= /^[^\r\n \t]+@[^\r\n \t]+$/;	// Just check that there is '@' character in the middle and no spaces.
 	
 	var mail;
 	var smtp;			
@@ -424,7 +424,7 @@ function SMTPScope () {
 			}
 			
 			// Do not send header/body line break, sendBody() will do it.
-			
+            			
 			smtpClient.sendBDAT(buffer.slice(0, size), false, sendBody);
 						
 		}
@@ -628,15 +628,29 @@ function SMTPScope () {
 			
 				recipients = new Array();
 				
-			}
+			} else {
+            
+                // Arguments are passed by reference, so a clone needs to be made.
+            
+                var t = recipients;
+
+                recipients = new Array();
+                for (var i = 0; i < t.length; i++)
+                
+                    recipients.push(t[i]);           
+            
+            }
 			
 			// Add "Cc" and "Bcc" to recipients.
-			
+            // Note that the used solution for case sensitiveness, is far from perfect.
+            
 			extractRecipients(email, 'cc', recipients);
 			extractRecipients(email, 'bcc', recipients);
 			extractRecipients(email, 'Cc', recipients);
 			extractRecipients(email, 'Bcc', recipients);
-			
+			extractRecipients(email, 'CC', recipients);
+			extractRecipients(email, 'BCC', recipients);
+            
 			// Add header fields for MIME attachments.
 			
 			var mimeMessage	= email.getMIMEMessage();
@@ -765,9 +779,17 @@ var createClient = function (address, port, isSSL, domain, callback) {
 
 }
 
-// Submit (send) a mail to a SMTP server. All arguments are mandatory. Last argument can be a Mail object, with its 
-// header (fields) and body filled. Or it can be a email addresses of sender and recipient, followed by subject and 
-// message content. For Wakanda, this function is synchronous and return a status if successful.
+// Submit (send) a mail to a SMTP server. Three syntaxes are possible:
+//
+//  send (smtpConfiguration, mailObject)
+//  send (address, port, isSSL, username, password, mailObject)                             (deprecated)
+//  send (address, port, isSSL, username, password, from, recipient, subject, content)      (deprecated)
+//
+// For each syntax, all arguments are mandatory. If a Mail object is used, it must be filled (header and body).
+// smtpConfiguration must have the following attributes set: address, port, isSSL, username, and password.
+// An optional domain attribute can be specified.
+//
+// For Wakanda, this function is synchronous and return a status if successful.
 //
 // If the SMTP server is connected using a non SSL socket and supports STARTTLS, then the connection will be 
 // automatically upgraded to SSL. This is better for security, of course. But in SSL mode, server will probably 
@@ -792,28 +814,59 @@ var send = function (address, port, isSSL, username, password, from, recipient, 
 	var smtp		= new SMTP();
 	var	mail		= require(isWakanda ? 'waf-mail/mail' : './mail.js');
 	var	status		= { action: -1, isOk: false, smtp: {} };
+    
+    var domain, email;
+    
+    if (arguments.length == 2) {
+    
+        // send (smtpConfiguration, mailObject)
+    
+        if (typeof arguments[0] != 'object' || typeof arguments[1] != 'object') 
+        
+            throw new smtp.SMTPException(smtp.SMTPException.INVALID_ARGUMENT);
+        
+        email = arguments[1];
+        
+        var smtpConfiguration   = arguments[0];
+        
+        address = smtpConfiguration.address;
+        port = smtpConfiguration.port;
+        isSSL = smtpConfiguration.isSSL;
+        username = smtpConfiguration.username;
+        password = smtpConfiguration.password;
+        domain = smtpConfiguration.domain;              
+                
+    } else if (arguments.length == 6) {
+	
+        // send (address, port, isSSL, username, password, mailObject)
+    
+		email = arguments[5];
+        
+    } else {
+    
+        // send (address, port, isSSL, username, password, from, recipient, subject, content) 
+        
+        if (typeof from != 'string' || (typeof recipient != 'string' && !(recipient instanceof Array))
+        || typeof subject != 'string' || (typeof content != 'string' && !(content instanceof Array)))
+        
+            throw new smtp.SMTPException(smtp.SMTPException.INVALID_ARGUMENT);
+            
+        else
+		
+            email = mail.createMessage(from, recipient, subject, content);
+    
+    }
+    
+    // Check SMTP configuration syntax.
 
 	if (typeof address != 'string' || typeof port != 'number' || typeof isSSL != 'boolean'
 	|| typeof username != 'string' || typeof password != 'string') 
 
 		throw new smtp.SMTPException(smtp.SMTPException.INVALID_ARGUMENT);
 	
-	// Accept both a mail object or "set" of arguments.
-		  
-	var email;
-	
-	if (arguments.length == 6)
-	
-		email = arguments[5];
-				
-	else if (typeof from != 'string' || (typeof recipient != 'string' && !(recipient instanceof Array))
-	|| typeof subject != 'string' || typeof content != 'string')
-		
-		throw new smtp.SMTPException(smtp.SMTPException.INVALID_ARGUMENT);
-		
-	else
-		
-		email = mail.createMessage(from, recipient, subject, content);	
+	if (typeof domain != 'string')
+    
+        domain = '';
 		
 	// Event loop exit function. For wakanda, use exitWait() to get out of wait(). Otherwise, close SMTP client, this
 	// will get out of event loop.
@@ -918,8 +971,8 @@ var send = function (address, port, isSSL, username, password, from, recipient, 
 		});
 		
 	}
-	
-	smtp.connect(address, port, isSSL, '', function (isOk, replyLines, isESMTP, extensions) {
+    	
+	smtp.connect(address, port, isSSL, domain, function (isOk, replyLines, isESMTP, extensions) {
 				 
 		if (!isOk) {
 
